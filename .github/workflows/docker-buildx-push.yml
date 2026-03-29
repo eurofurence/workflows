@@ -1,0 +1,116 @@
+name: Buildx & push Docker image (SemVer & ghcr.io)
+
+##
+## Opinionated workflow for automatically building and pushing container images
+## for GitHub Container Registry (GHCR) in repositories using SemVer (semantic
+## versioning; see https://semver.org) in their tagging.
+## Uses GitHub actions provided by Docker including qemu and buildx.
+##
+## Note: DOLLAR in the input descriptions should of course be replaced with an
+##       actual dollar sign. GitHub parses the description, but there's no
+##       way to escape the dollar sign, so we can't include it verbatim. (:
+##
+## Usage Example:
+## --------------
+##
+## on:
+##   push:
+##     branches:
+##       - "main"
+##     tags:
+##       - "v[0-9]+.[0-9]+.[0-9]"
+##       - "v[0-9]+.[0-9]+.[0-9]-**"
+##
+## jobs:
+##   build-and-push-image:
+##     uses: eurofurence/workflows/.github/workflows/docker-buildx-push.yml@main
+##     permissions:
+##       contents: read
+##       packages: write
+##     with:
+##       build-args: "--build-arg FOO=bar"
+##       build-context: ./app
+##       dockerfile: ./docker/Dockerfile
+##       image-name: ${{ github.repository }}
+##     secrets:
+##       ghcr-token: ${{ secrets.GITHUB_TOKEN }}
+##
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        required: true
+        type: string
+        description: The image name to push. Should usually be set to DOLLAR{{ github.repository }}, which will evaluate to e.g. eurofurence/reg-attendee-service
+      dockerfile:
+        required: false
+        default: "Dockerfile"
+        type: string
+        description: Dockerfile to use when calling docker build.
+      build-context:
+        required: false
+        default: "."
+        type: string
+        description: Path to build context for docker build command.
+      build-args:
+        required: false
+        default: ""
+        type: string
+        description: Additional arguments provided to the docker build command.
+    secrets:
+      ghcr-token:
+        required: true
+        description: Token to use for GHCR login, should be set to DOLLAR{{ secrets.GITHUB_TOKEN }} with token permissions limited to package write and content read and nothing else.
+
+jobs:
+  build-and-push-image:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.IMAGE_NAME }}
+          tags: |
+            type=schedule,pattern=nightly
+            type=edge,branch=main
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+
+      - name: Log in to GitHub container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ghcr-token }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker BuildX
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: network=host
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          cache-from: "type=gha"
+          cache-to: "type=gha,mode=max"
+          builder: ${{ steps.buildx.outputs.name }}
+          build-args: ${{ inputs.build-args }}
+          context: ${{ inputs.build-context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

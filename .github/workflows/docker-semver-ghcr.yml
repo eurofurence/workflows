@@ -1,0 +1,140 @@
+name: Build & push Docker image (SemVer & ghcr.io)
+
+##
+## Opinionated workflow for automatically building and pushing container images
+## for GitHub Container Registry (GHCR) in repositories using SemVer (semantic
+## versioning; see https://semver.org) in their tagging.
+## Calls /.github/workflows/docker-build-push.yml using some sane defaults.
+##
+## Note: DOLLAR in the input descriptions should of course be replaced with an
+##       actual dollar sign. GitHub parses the description, but there's no
+##       way to escape the dollar sign, so we can't include it verbatim. (:
+##
+## Usage Example:
+## --------------
+##
+## on:
+##   push:
+##     branches:
+##       - "main"
+##     tags:
+##       - "v[0-9]+.[0-9]+.[0-9]"
+##       - "v[0-9]+.[0-9]+.[0-9]-**"
+##
+## jobs:
+##   build-and-push-image:
+##     uses: eurofurence/workflows/.github/workflows/docker-semver-ghcr.yml@main
+##     permissions:
+##       contents: read
+##       packages: write
+##     with:
+##       build-args: ${{ inputs.build-args }}
+##       image-name: ${{ github.repository }}
+##     secrets:
+##       ghcr-token: ${{ secrets.GITHUB_TOKEN }}
+##
+
+on:
+  push:
+    branches:
+      - "main"
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]"
+      - "v[0-9]+.[0-9]+.[0-9]-**"
+  workflow_call:
+    inputs:
+      image-name:
+        required: true
+        type: string
+        description: The image name to push. Should usually be set to DOLLAR{{ github.repository }}, which will evaluate to e.g. eurofurence/reg-attendee-service
+      dockerfile:
+        required: false
+        default: "Dockerfile"
+        type: string
+        description: Dockerfile to use when calling docker build.
+      build-context:
+        required: false
+        default: "."
+        type: string
+        description: Path to build context for docker build command.
+      build-args:
+        required: false
+        default: ""
+        type: string
+        description: Additional arguments provided to the docker build command.
+    secrets:
+      ghcr-token:
+        required: true
+        description: Token to use for GHCR login, should be set to DOLLAR{{ secrets.GITHUB_TOKEN }} with token permissions limited to package write and content read and nothing else.
+
+jobs:
+  determine-build-version:
+    runs-on: ubuntu-latest
+    outputs:
+      build-version: ${{ steps.build-version.outputs.build-version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Determine build version from git tags
+        id: build-version
+        run: echo "build-version=$(git describe --tags --abbrev=0 | sed -e 's/^v//')" >> "$GITHUB_OUTPUT"; echo "GitHub Outputs:"; cat $GITHUB_OUTPUT
+
+  call_build-and-push-image_nightly:
+    if: startsWith(github.ref, 'refs/heads/')
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-build-push.yml
+    needs: [determine-build-version]
+    with:
+      branch-or-tag-name: ${{ github.ref_name }}
+      build-args: "${{ inputs.build-args }} --build-arg BUILD_VERSION=${{ needs.determine-build-version.outputs.build-version }}-nightly"
+      build-context: ${{ inputs.build-context }}
+      commit-hash: ${{ github.sha }}
+      dockerfile: ${{ inputs.dockerfile }}
+      full-repo-url: https://github.com/${{ github.repository }}
+      image-name: ${{ inputs.image-name }}
+      image-tags: nightly
+      registry-user: ${{ github.actor }}
+    secrets:
+      registry-pass: ${{ secrets.ghcr-token }}
+
+  call_build-and-push-image_prerelease:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-build-push.yml
+    needs: [determine-build-version]
+    with:
+      branch-or-tag-name: ${{ github.ref_name }}
+      build-args: "${{ inputs.build-args }} --build-arg BUILD_VERSION=${{ needs.determine-build-version.outputs.build-version }}"
+      commit-hash: ${{ github.sha }}
+      dockerfile: ${{ inputs.dockerfile }}
+      full-repo-url: https://github.com/${{ github.repository }}
+      image-name: ${{ inputs.image-name }}
+      image-tags: ${{ github.ref_name }}
+      registry-user: ${{ github.actor }}
+    secrets:
+      registry-pass: ${{ secrets.ghcr-token }}
+
+  call_build-and-push-image_release:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-build-push.yml
+    needs: [determine-build-version]
+    with:
+      branch-or-tag-name: ${{ github.ref_name }}
+      build-args: "${{ inputs.build-args }} --build-arg BUILD_VERSION=${{ needs.determine-build-version.outputs.build-version }}"
+      commit-hash: ${{ github.sha }}
+      dockerfile: ${{ inputs.dockerfile }}
+      full-repo-url: https://github.com/${{ github.repository }}
+      image-name: ${{ inputs.image-name }}
+      image-tags: ${{ github.ref_name }} latest
+      registry-user: ${{ github.actor }}
+    secrets:
+      registry-pass: ${{ secrets.ghcr-token }}
