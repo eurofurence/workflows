@@ -75,7 +75,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ env.IMAGE_NAME }}
+          images: ghcr.io/${{ env.image-name }}
           tags: |
             type=schedule,pattern=nightly
             type=edge,branch=main
